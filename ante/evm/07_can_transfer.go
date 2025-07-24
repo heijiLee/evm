@@ -34,15 +34,7 @@ func CanTransfer(
 		)
 	}
 
-	// NOTE: pass in an empty coinbase address and nil tracer as we don't need them for the check below
-	cfg := &statedb.EVMConfig{
-		Params:   params,
-		CoinBase: common.Address{},
-		BaseFee:  baseFee,
-	}
-
 	stateDB := statedb.New(ctx, evmKeeper, statedb.NewEmptyTxConfig(common.BytesToHash(ctx.HeaderHash())))
-	evm := evmKeeper.NewEVM(ctx, msg, cfg, evmtypes.NewNoOpTracer(), stateDB)
 
 	// check that caller has enough balance to cover asset transfer for **topmost** call
 	// NOTE: here the gas consumed is from the context with the infinite gas meter
@@ -50,7 +42,7 @@ func CanTransfer(
 	if err != nil {
 		return err
 	}
-	if msg.Value.Sign() > 0 && !evm.Context.CanTransfer(stateDB, msg.From, convertedValue) {
+	if msg.Value.Sign() > 0 && stateDB.GetBalance(msg.From).Cmp(convertedValue) < 0 {
 		return errorsmod.Wrapf(
 			errortypes.ErrInsufficientFunds,
 			"failed to transfer %s from address %s using the EVM block context transfer function",
