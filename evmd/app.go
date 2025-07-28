@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cast"
 
@@ -30,6 +31,7 @@ import (
 	feemarketkeeper "github.com/cosmos/evm/x/feemarket/keeper"
 	feemarkettypes "github.com/cosmos/evm/x/feemarket/types"
 	ibccallbackskeeper "github.com/cosmos/evm/x/ibc/callbacks/keeper"
+
 	// NOTE: override ICS20 keeper to support IBC transfers of ERC20 tokens
 	evmdconfig "github.com/cosmos/evm/evmd/cmd/evmd/config"
 	"github.com/cosmos/evm/x/ibc/transfer"
@@ -832,11 +834,23 @@ func (app *EVMD) Name() string { return app.BaseApp.Name() }
 
 // BeginBlocker application updates every begin block
 func (app *EVMD) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
+	startTime := time.Now()
+	ctx = ctx.WithValue("block_start_time", startTime)
 	return app.ModuleManager.BeginBlock(ctx)
 }
 
 // EndBlocker application updates every end block
 func (app *EVMD) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
+	if startTime, ok := ctx.Value("block_start_time").(time.Time); ok {
+		duration := time.Since(startTime)
+		app.Logger().Info(
+			"Block Latency",
+			"height", ctx.BlockHeight(),
+			"duration_ms", duration.Milliseconds(),
+			"tx_count", len(ctx.TxBytes()),
+		)
+	}
+
 	return app.ModuleManager.EndBlock(ctx)
 }
 

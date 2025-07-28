@@ -148,7 +148,6 @@ func (k Keeper) GetHashFn(ctx sdk.Context) vm.GetHashFunc {
 //
 // For relevant discussion see: https://github.com/cosmos/cosmos-sdk/discussions/9072
 func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction, firstTx bool) (*types.MsgEthereumTxResponse, error) {
-	k.Logger(ctx).Info("In ApplyTx with ", firstTx)
 	var (
 		bloom        *big.Int
 		bloomReceipt ethtypes.Bloom
@@ -175,7 +174,7 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction, fir
 	}
 	evm := k.blockScopedEVM
 	// pass true to commit the StateDB
-	res, err := k.ApplyMessageWithEVM(tmpCtx, *msg, evm, txConfig)
+	res, err := k.ApplyMessageWithEVM(tmpCtx, *msg, evm, cfg, txConfig)
 	//res, err := k.ApplyMessageWithConfig(tmpCtx, *msg, nil, true, cfg, txConfig)
 	if err != nil {
 		// when a transaction contains multiple msg, as long as one of the msg fails
@@ -459,26 +458,27 @@ func (k *Keeper) ApplyMessageWithConfig(
 
 // ApplyMessageWithEVM only calls from ApplyTransaction for Ethereum transactions.
 // It is used to apply a message with an already created EVM instance.
+// operate under the same logic with ApplyMessageWithConfig, except for reuse EVM.
 // tracer, commit = nil, true
 func (k *Keeper) ApplyMessageWithEVM(
 	ctx sdk.Context,
 	msg core.Message,
 	evm *vm.EVM,
+	cfg *statedb.EVMConfig,
 	txConfig statedb.TxConfig,
 ) (*types.MsgEthereumTxResponse, error) {
-	k.Logger(ctx).Info("In ApplyMessageWithEVM")
 	var (
 		ret   []byte // return bytes from evm execution
 		vmErr error  // vm errors do not effect consensus and are therefore not assigned to err
 	)
-	cfg, err := k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
 	stateDB := statedb.New(ctx, k, txConfig)
-	//evm = k.NewEVM(ctx, msg, cfg, nil, stateDB)
-	//evm.SetStateDB(stateDB)
-	// statedb.New() can be removed ??
 	evm.StateDB = stateDB
+
+	// same logic with NewEVM function
+	ethCfg := types.GetEthChainConfig()
 	txCtx := core.NewEVMTxContext(&msg)
-	evm.Config = k.VMConfig(ctx, msg, cfg, nil)
+	tracer := k.Tracer(ctx, msg, ethCfg)
+	evm.Config = k.VMConfig(ctx, msg, cfg, tracer)
 	signer := msg.From
 	accessControl := types.NewRestrictedPermissionPolicy(&cfg.Params.AccessControl, signer)
 
@@ -491,8 +491,11 @@ func (k *Keeper) ApplyMessageWithEVM(
 		accessControl.GetCallHook(signer),
 		k.GetPrecompilesCallHook(ctx),
 	)
-	//evm.hooks = k.hooks
-	evm.TxContext = txCtx
+
+	//evm.SetHooks(evmHooks)
+	//evm.SetChainCfg(ethCfg, evm.Context)
+	evm.SetTxContext(txCtx)
+
 	leftoverGas := msg.GasLimit
 
 	// Allow the tracer captures the tx level events, mainly the gas consumption.
@@ -509,8 +512,6 @@ func (k *Keeper) ApplyMessageWithEVM(
 			}
 		}()
 	}
-
-	ethCfg := types.GetEthChainConfig()
 
 	sender := vm.AccountRef(msg.From)
 	contractCreation := msg.To == nil
