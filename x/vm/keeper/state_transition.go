@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -152,7 +153,12 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction) (*t
 		bloom        *big.Int
 		bloomReceipt ethtypes.Bloom
 	)
-
+	fmt.Print(ctx.BlockHeight())
+	fmt.Print(", ")
+	fmt.Print(ctx.BlockHeader().DataHash)
+	fmt.Println("  : ctx-height, BlockHeader.Datahash")
+	fmt.Print(tx.Hash())
+	fmt.Println("  : tx_hash")
 	cfg, err := k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to load evm config")

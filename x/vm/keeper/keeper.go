@@ -63,6 +63,8 @@ type Keeper struct {
 	// Tracer used to collect execution traces from the EVM transaction execution
 	tracer string
 
+	blockScopedEVM *vm.EVM
+
 	hooks types.EvmHooks
 	// EVM Hooks for tx post-processing
 
