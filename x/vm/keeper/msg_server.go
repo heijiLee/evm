@@ -42,8 +42,13 @@ func (k *Keeper) EthereumTx(goCtx context.Context, msg *types.MsgEthereumTx) (*t
 	} else {
 		labels = append(labels, telemetry.NewLabel("execution", "call"))
 	}
-
-	response, err := k.ApplyTransaction(ctx, tx)
+	var response *types.MsgEthereumTxResponse
+	var err error
+	if k.blockScopedEVM.Context.BlockNumber.Int64() != ctx.BlockHeight() {
+		response, err = k.ApplyTransaction(ctx, tx, true)
+	} else {
+		response, err = k.ApplyTransaction(ctx, tx, false)
+	}
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to apply transaction")
 	}

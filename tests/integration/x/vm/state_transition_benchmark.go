@@ -184,7 +184,7 @@ func BenchmarkApplyTransaction(b *testing.B, create network.CreateEvmApp) { //no
 		require.NoError(b, err)
 
 		b.StartTimer()
-		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), tx)
+		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), tx, true)
 		b.StopTimer()
 
 		require.NoError(b, err)
@@ -214,7 +214,7 @@ func BenchmarkApplyTransactionWithLegacyTx(b *testing.B, create network.CreateEv
 		require.NoError(b, err)
 
 		b.StartTimer()
-		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), tx)
+		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), tx, true)
 		b.StopTimer()
 
 		require.NoError(b, err)
@@ -244,7 +244,7 @@ func BenchmarkApplyTransactionWithDynamicFeeTx(b *testing.B, create network.Crea
 		require.NoError(b, err)
 
 		b.StartTimer()
-		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), tx)
+		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), tx, true)
 		b.StopTimer()
 
 		require.NoError(b, err)
@@ -325,6 +325,42 @@ func BenchmarkApplyMessageWithLegacyTx(b *testing.B, create network.CreateEvmApp
 }
 
 func BenchmarkApplyMessageWithDynamicFeeTx(b *testing.B, create network.CreateEvmApp) {
+	suite := KeeperTestSuite{EnableFeemarket: true, EnableLondonHF: true, Create: create}
+	suite.SetT(&testing.T{})
+	suite.SetupTest()
+
+	ethCfg := evmtypes.GetEthChainConfig()
+	signer := ethtypes.LatestSignerForChainID(ethCfg.ChainID)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		addr := suite.Keyring.GetAddr(0)
+		krSigner := utiltx.NewSigner(suite.Keyring.GetPrivKey(0))
+		m, err := newNativeMessage(
+			suite.Network.App.GetEVMKeeper().GetNonce(suite.Network.GetContext(), addr),
+			suite.Network.GetContext().BlockHeight(),
+			addr,
+			ethCfg,
+			krSigner,
+			signer,
+			ethtypes.DynamicFeeTxType,
+			nil,
+			nil,
+		)
+		require.NoError(b, err)
+
+		b.StartTimer()
+		resp, err := suite.Network.App.GetEVMKeeper().ApplyMessage(suite.Network.GetContext(), *m, nil, true)
+		b.StopTimer()
+
+		require.NoError(b, err)
+		require.False(b, resp.Failed())
+	}
+}
+
+func BenchmarkApplyTransactionWithEVM(b *testing.B, create network.CreateEvmApp) {
 	suite := KeeperTestSuite{EnableFeemarket: true, EnableLondonHF: true, Create: create}
 	suite.SetT(&testing.T{})
 	suite.SetupTest()

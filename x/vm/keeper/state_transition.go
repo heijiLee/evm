@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -148,17 +147,12 @@ func (k Keeper) GetHashFn(ctx sdk.Context) vm.GetHashFunc {
 // returning.
 //
 // For relevant discussion see: https://github.com/cosmos/cosmos-sdk/discussions/9072
-func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction) (*types.MsgEthereumTxResponse, error) {
+func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction, firstTx bool) (*types.MsgEthereumTxResponse, error) {
+	k.Logger(ctx).Info("In ApplyTx with ", firstTx)
 	var (
 		bloom        *big.Int
 		bloomReceipt ethtypes.Bloom
 	)
-	fmt.Print(ctx.BlockHeight())
-	fmt.Print(", ")
-	fmt.Print(ctx.BlockHeader().DataHash)
-	fmt.Println("  : ctx-height, BlockHeader.Datahash")
-	fmt.Print(tx.Hash())
-	fmt.Println("  : tx_hash")
 	cfg, err := k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to load evm config")
@@ -176,9 +170,13 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction) (*t
 	// Didn't use `Snapshot` because the context stack has exponential complexity on certain operations,
 	// thus restricted to be used only inside `ApplyMessage`.
 	tmpCtx, commit := ctx.CacheContext()
-
+	if firstTx {
+		k.blockScopedEVM = k.NewEVM(ctx, *msg, cfg, nil, nil)
+	}
+	evm := k.blockScopedEVM
 	// pass true to commit the StateDB
-	res, err := k.ApplyMessageWithConfig(tmpCtx, *msg, nil, true, cfg, txConfig)
+	res, err := k.ApplyMessageWithEVM(tmpCtx, *msg, evm, txConfig)
+	//res, err := k.ApplyMessageWithConfig(tmpCtx, *msg, nil, true, cfg, txConfig)
 	if err != nil {
 		// when a transaction contains multiple msg, as long as one of the msg fails
 		// all gas will be deducted. so is not msg.Gas()
@@ -429,6 +427,157 @@ func (k *Keeper) ApplyMessageWithConfig(
 		if err := stateDB.Commit(); err != nil {
 			return nil, errorsmod.Wrap(err, "failed to commit stateDB")
 		}
+	}
+
+	// calculate a minimum amount of gas to be charged to sender if GasLimit
+	// is considerably higher than GasUsed to stay more aligned with Tendermint gas mechanics
+	// for more info https://github.com/evmos/ethermint/issues/1085
+	gasLimit := math.LegacyNewDecFromInt(math.NewIntFromUint64(msg.GasLimit)) //#nosec G115 -- int overflow is not a concern here -- msg gas is not exceeding int64 max value
+	minGasMultiplier := k.GetMinGasMultiplier(ctx)
+	minimumGasUsed := gasLimit.Mul(minGasMultiplier)
+
+	if !minimumGasUsed.TruncateInt().IsUint64() {
+		return nil, errorsmod.Wrapf(types.ErrGasOverflow, "minimumGasUsed(%s) is not a uint64", minimumGasUsed.TruncateInt().String())
+	}
+
+	if msg.GasLimit < leftoverGas {
+		return nil, errorsmod.Wrapf(types.ErrGasOverflow, "message gas limit < leftover gas (%d < %d)", msg.GasLimit, leftoverGas)
+	}
+
+	gasUsed := math.LegacyMaxDec(minimumGasUsed, math.LegacyNewDec(int64(temporaryGasUsed))).TruncateInt().Uint64() //#nosec G115 -- int overflow is not a concern here
+	// reset leftoverGas, to be used by the tracer
+	leftoverGas = msg.GasLimit - gasUsed
+
+	return &types.MsgEthereumTxResponse{
+		GasUsed: gasUsed,
+		VmError: vmError,
+		Ret:     ret,
+		Logs:    types.NewLogsFromEth(stateDB.Logs()),
+		Hash:    txConfig.TxHash.Hex(),
+	}, nil
+}
+
+// ApplyMessageWithEVM only calls from ApplyTransaction for Ethereum transactions.
+// It is used to apply a message with an already created EVM instance.
+// tracer, commit = nil, true
+func (k *Keeper) ApplyMessageWithEVM(
+	ctx sdk.Context,
+	msg core.Message,
+	evm *vm.EVM,
+	txConfig statedb.TxConfig,
+) (*types.MsgEthereumTxResponse, error) {
+	k.Logger(ctx).Info("In ApplyMessageWithEVM")
+	var (
+		ret   []byte // return bytes from evm execution
+		vmErr error  // vm errors do not effect consensus and are therefore not assigned to err
+	)
+	cfg, err := k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
+	stateDB := statedb.New(ctx, k, txConfig)
+	//evm = k.NewEVM(ctx, msg, cfg, nil, stateDB)
+	//evm.SetStateDB(stateDB)
+	// statedb.New() can be removed ??
+	evm.StateDB = stateDB
+	txCtx := core.NewEVMTxContext(&msg)
+	evm.Config = k.VMConfig(ctx, msg, cfg, nil)
+	signer := msg.From
+	accessControl := types.NewRestrictedPermissionPolicy(&cfg.Params.AccessControl, signer)
+
+	// Set hooks for the EVM opcodes
+	evmHooks := types.NewDefaultOpCodesHooks()
+	evmHooks.AddCreateHooks(
+		accessControl.GetCreateHook(signer),
+	)
+	evmHooks.AddCallHooks(
+		accessControl.GetCallHook(signer),
+		k.GetPrecompilesCallHook(ctx),
+	)
+	//evm.hooks = k.hooks
+	evm.TxContext = txCtx
+	leftoverGas := msg.GasLimit
+
+	// Allow the tracer captures the tx level events, mainly the gas consumption.
+	vmCfg := evm.Config
+	if vmCfg.Tracer != nil {
+		vmCfg.Tracer.OnTxStart(
+			evm.GetVMContext(),
+			ethtypes.NewTx(&ethtypes.LegacyTx{To: msg.To, Data: msg.Data, Value: msg.Value, Gas: msg.GasLimit}),
+			msg.From,
+		)
+		defer func() {
+			if vmCfg.Tracer.OnTxEnd != nil {
+				vmCfg.Tracer.OnTxEnd(&ethtypes.Receipt{GasUsed: msg.GasLimit - leftoverGas}, vmErr)
+			}
+		}()
+	}
+
+	ethCfg := types.GetEthChainConfig()
+
+	sender := vm.AccountRef(msg.From)
+	contractCreation := msg.To == nil
+	isLondon := ethCfg.IsLondon(evm.Context.BlockNumber)
+
+	intrinsicGas, err := k.GetEthIntrinsicGas(ctx, msg, ethCfg, contractCreation)
+	if err != nil {
+		// should have already been checked on Ante Handler
+		return nil, errorsmod.Wrap(err, "intrinsic gas failed")
+	}
+
+	// Should check again even if it is checked on Ante Handler, because eth_call don't go through Ante Handler.
+	if leftoverGas < intrinsicGas {
+		// eth_estimateGas will check for this exact error
+		return nil, errorsmod.Wrap(core.ErrIntrinsicGas, "apply message")
+	}
+	leftoverGas -= intrinsicGas
+
+	// access list preparation is moved from ante handler to here, because it's needed when `ApplyMessage` is called
+	// under contexts where ante handlers are not run, for example `eth_call` and `eth_estimateGas`.
+	rules := ethCfg.Rules(big.NewInt(ctx.BlockHeight()), true, uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
+	stateDB.Prepare(rules, msg.From, common.Address{}, msg.To, evm.ActivePrecompiles(), msg.AccessList)
+
+	convertedValue, err := utils.Uint256FromBigInt(msg.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	if contractCreation {
+		// take over the nonce management from evm:
+		// - reset sender's nonce to msg.Nonce() before calling evm.
+		// - increase sender's nonce by one no matter the result.
+		stateDB.SetNonce(sender.Address(), msg.Nonce, tracing.NonceChangeEoACall)
+		ret, _, leftoverGas, vmErr = evm.Create(sender.Address(), msg.Data, leftoverGas, convertedValue)
+		stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
+	} else {
+		ret, leftoverGas, vmErr = evm.Call(sender.Address(), *msg.To, msg.Data, leftoverGas, convertedValue)
+	}
+
+	refundQuotient := params.RefundQuotient
+
+	// After EIP-3529: refunds are capped to gasUsed / 5
+	if isLondon {
+		refundQuotient = params.RefundQuotientEIP3529
+	}
+
+	// calculate gas refund
+	if msg.GasLimit < leftoverGas {
+		return nil, errorsmod.Wrap(types.ErrGasOverflow, "apply message")
+	}
+	// refund gas
+	temporaryGasUsed := msg.GasLimit - leftoverGas
+	refund := GasToRefund(stateDB.GetRefund(), temporaryGasUsed, refundQuotient)
+
+	// update leftoverGas and temporaryGasUsed with refund amount
+	leftoverGas += refund
+	temporaryGasUsed -= refund
+
+	// EVM execution error needs to be available for the JSON-RPC client
+	var vmError string
+	if vmErr != nil {
+		vmError = vmErr.Error()
+	}
+
+	// The dirty states in `StateDB` is either committed or discarded after return
+	if err := stateDB.Commit(); err != nil {
+		return nil, errorsmod.Wrap(err, "failed to commit stateDB")
 	}
 
 	// calculate a minimum amount of gas to be charged to sender if GasLimit
