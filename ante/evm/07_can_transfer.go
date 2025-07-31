@@ -3,12 +3,10 @@ package evm
 import (
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
 	"github.com/cosmos/evm/utils"
-	"github.com/cosmos/evm/x/vm/statedb"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
 	errorsmod "cosmossdk.io/errors"
@@ -34,15 +32,13 @@ func CanTransfer(
 		)
 	}
 
-	stateDB := statedb.New(ctx, evmKeeper, statedb.NewEmptyTxConfig(common.BytesToHash(ctx.HeaderHash())))
-
 	// check that caller has enough balance to cover asset transfer for **topmost** call
 	// NOTE: here the gas consumed is from the context with the infinite gas meter
 	convertedValue, err := utils.Uint256FromBigInt(msg.Value)
 	if err != nil {
 		return err
 	}
-	if msg.Value.Sign() > 0 && stateDB.GetBalance(msg.From).Cmp(convertedValue) < 0 {
+	if msg.Value.Sign() > 0 && evmKeeper.GetBalance(ctx, msg.From).Cmp(convertedValue) < 0 {
 		return errorsmod.Wrapf(
 			errortypes.ErrInsufficientFunds,
 			"failed to transfer %s from address %s using the EVM block context transfer function",
