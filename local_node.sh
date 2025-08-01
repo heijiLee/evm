@@ -221,9 +221,6 @@ if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
 fi
 
 # Start the node
-
-surge f
-
 evmd start "$TRACE" \
 	--log_level $LOGLEVEL \
 	--minimum-gas-prices=0.0001atest \
