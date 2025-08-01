@@ -36,7 +36,7 @@ mkdir bin/evmd-modified
 
 Use the provided script to build both versions of the evmd binary:
 ```
-./build_evmd_pair.sh "your-branch-name"
+./build_evmds.sh "your-branch-name"
 ```
 (e.g. ``./build_evmd_pair.sh feat/evm-recycle``)
 
@@ -88,25 +88,21 @@ evmd query bank balances <address> --home node1
 
 ⸻
 
-🧼 Cleanup
-
-rm -rf evmd-local/.testnets
-
-
-⸻
 
 🧠 Notes
 - All nodes must share the exact same genesis.json
 - Ensure that only one side initiates a P2P connection to avoid duplicate handshake issues
 - pprof, Prometheus, and ports are all automatically deconflicted based on node ID
+- **To enable in v0.3 release version, just modified part of build_evmds.sh like below**
+  ```
+  # original
+  ...
+  jq '.app_state.erc20.params.native_precompiles=["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+  ...
+  # modified
+  ...
+  jq '.app_state.erc20.native_precompiles=["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+  ...
 
-⸻
-
-📂 File Overview
-
-File	Description
-build_evmd_pair.sh	Builds and stores main and modified binaries
-init_and_connect.sh	Initializes a node and connects it to node0
-start_all.sh (optional)	Script to start all nodes together
-evmd-local/.testnets	Local multi-node state directory
+  ```
 
