@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+### IMPROVEMENT
+- [\#352](https://github.com/cosmos/evm/pull/352) Remove the creation of a Geth EVM instance, stateDB during the AnteHandler balance check.
+
+
 ## v0.4.0
 
 ### DEPENDENCIES
