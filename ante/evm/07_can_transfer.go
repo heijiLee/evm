@@ -38,7 +38,7 @@ func CanTransfer(
 	if err != nil {
 		return err
 	}
-	if msg.Value.Sign() > 0 && evmKeeper.GetBalance(ctx, msg.From).Cmp(convertedValue) < 0 {
+	if msg.Value.Sign() > 0 && evmKeeper.GetAccount(ctx, msg.From).Balance.Cmp(convertedValue) < 0 {
 		return errorsmod.Wrapf(
 			errortypes.ErrInsufficientFunds,
 			"failed to transfer %s from address %s using the EVM block context transfer function",
