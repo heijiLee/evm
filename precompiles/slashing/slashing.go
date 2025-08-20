@@ -18,7 +18,7 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/runtime"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
+	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 )
 
 var _ vm.PrecompiledContract = &Precompile{}
@@ -31,9 +31,10 @@ var f embed.FS
 // Precompile defines the precompiled contract for slashing.
 type Precompile struct {
 	cmn.Precompile
-	slashingKeeper slashingkeeper.Keeper
-	consCodec      runtime.ConsensusAddressCodec
-	valCodec       runtime.ValidatorAddressCodec
+	slashingKeeper    cmn.SlashingKeeper
+	slashingMsgServer slashingtypes.MsgServer
+	consCodec         runtime.ConsensusAddressCodec
+	valCodec          runtime.ValidatorAddressCodec
 }
 
 // LoadABI loads the slashing ABI from the embedded abi.json file
@@ -45,7 +46,9 @@ func LoadABI() (abi.ABI, error) {
 // NewPrecompile creates a new slashing Precompile instance as a
 // PrecompiledContract interface.
 func NewPrecompile(
-	slashingKeeper slashingkeeper.Keeper,
+	slashingKeeper cmn.SlashingKeeper,
+	slashingMsgServer slashingtypes.MsgServer,
+	bankKeeper cmn.BankKeeper,
 	valCdc, consCdc address.Codec,
 ) (*Precompile, error) {
 	abi, err := LoadABI()
@@ -59,13 +62,17 @@ func NewPrecompile(
 			KvGasConfig:          storetypes.KVGasConfig(),
 			TransientKVGasConfig: storetypes.TransientGasConfig(),
 		},
-		slashingKeeper: slashingKeeper,
-		valCodec:       valCdc,
-		consCodec:      consCdc,
+		slashingKeeper:    slashingKeeper,
+		slashingMsgServer: slashingMsgServer,
+		valCodec:          valCdc,
+		consCodec:         consCdc,
 	}
 
 	// SetAddress defines the address of the slashing precompiled contract.
 	p.SetAddress(common.HexToAddress(evmtypes.SlashingPrecompileAddress))
+
+	// Set the balance handler for the precompile.
+	p.SetBalanceHandler(bankKeeper)
 
 	return p, nil
 }
@@ -119,6 +126,8 @@ func (p Precompile) run(evm *vm.EVM, contract *vm.Contract, readOnly bool) (bz [
 		bz, err = p.GetSigningInfo(ctx, method, contract, args)
 	case GetSigningInfosMethod:
 		bz, err = p.GetSigningInfos(ctx, method, contract, args)
+	case GetParamsMethod:
+		bz, err = p.GetParams(ctx, method, contract, args)
 	default:
 		return nil, fmt.Errorf(cmn.ErrUnknownMethod, method.Name)
 	}

@@ -83,7 +83,7 @@ func (p Precompile) RunSetup(
 	events := ctx.EventManager().Events()
 
 	// add precompileCall entry on the stateDB journal
-	// this allows to revert the changes within an evm txAdd commentMore actions
+	// this allows to revert the changes within an evm tx
 	err = stateDB.AddPrecompileFn(p.Address(), snapshot, events)
 	if err != nil {
 		return sdk.Context{}, nil, nil, uint64(0), nil, err
@@ -226,8 +226,9 @@ func (p Precompile) standardCallData(contract *vm.Contract) (method *abi.Method,
 }
 
 func (p *Precompile) GetBalanceHandler() *BalanceHandler {
-	if p.balanceHandler == nil {
-		p.balanceHandler = NewBalanceHandler()
-	}
 	return p.balanceHandler
+}
+
+func (p *Precompile) SetBalanceHandler(bankKeeper BankKeeper) {
+	p.balanceHandler = NewBalanceHandler(bankKeeper)
 }
